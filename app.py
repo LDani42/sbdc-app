@@ -1,21 +1,33 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import tempfile
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# Load API key from Streamlit Secrets
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.title("Whisper API Audio Transcription")
+st.title("🎙 Whisper Audio Transcription")
 
-audio_file = st.file_uploader("Upload audio for transcription", type=["webm", "mp3", "wav"])
+uploaded_file = st.file_uploader("Upload an audio file for transcription", type=['mp3', 'mp3', 'wav', 'webm'])
 
-if audio_file:
-    st.audio(audio_file)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-        tmp.write(audio_file.getbuffer())
-        tmp_path = tmp.name
+if uploaded_file := st.file_uploader("Upload audio to transcribe:", type=["wav", "mp3", "webm", "m4a"]):
+    st.audio(uploaded_file, format='audio/webm')
 
-    with open(tmp_path, "rb") as file:
-        transcript = openai.Audio.transcribe("whisper-1", file)
+    if st.button("Transcribe Audio"):
+        with st.spinner("Transcribing..."):
+            # Save uploaded file temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_file:
+                tmp_file_name = tmp.name
+                tmp_audio = uploaded_file.getvalue()
+                tmp_file_path = tmp.name
+                with open(tmp_path, 'wb') as f:
+                    f.write(uploaded_file.getbuffer())
 
-    st.write("**Transcript:**")
-    st.success(transcript["text"])
+                # Transcribe using OpenAI Whisper
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=open(tmp_file.name, "rb")
+                )
+
+            st.success("Transcription complete!")
+            st.write("**Transcript:**")
+            st.write(transcript.text)
