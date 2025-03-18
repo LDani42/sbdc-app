@@ -4,74 +4,69 @@ import tempfile
 import os
 from pydub import AudioSegment
 import math
+from pyannote.audio import Pipeline
 
 # Whisper API setup
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.title("🎧 Enhanced Long Audio Transcription")
+# Pyannote pipeline setup (requires Hugging Face token)
+HUGGINGFACE_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
+pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=HUGGINGFACE_TOKEN)
 
-uploaded_file = st.file_uploader("Upload audio (any format)", type=["mp3", "wav", "webm", "m4a"])
+st.title("🎤 Whisper Transcription with Speaker Diarization")
 
-CHUNK_LENGTH_MS = 10 * 60 * 1000  # 10 min chunks
-
-def transcribe_chunk(chunk_path):
-    with open(chunk_path, "rb") as audio:
-        transcript = client.audio.transcriptions.create(model="whisper-1", file=audio)
-    return transcript.text
+uploaded_file = st.file_uploader("Upload your audio file", type=["mp3", "wav", "webm", "m4a"])
 
 if uploaded_file:
     st.audio(uploaded_file)
 
-    if st.button("Transcribe (Optimized)"):
-        with st.spinner("Optimizing audio & transcribing..."):
+    if st.button("Transcribe & Diarize Speakers"):
+        with st.spinner("Processing... (this may take several minutes)"):
             with tempfile.TemporaryDirectory() as tmpdir:
-                original_audio_path = os.path.join(tmpdir, "original_audio")
-                optimized_audio_path = os.path.join(tmpdir, "optimized_audio.mp3")
+                audio_path = os.path.join(tmpdir, "audio_input.mp3")
 
-                # Save original file
-                with open(original_audio_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+                # Convert to MP3 for optimization
+                audio_segment = AudioSegment.from_file(uploaded_file)
+                audio_segment.export(audio_path, format="mp3", bitrate="64k")
 
-                # Convert original audio to MP3 to compress size
-                audio = AudioSegment.from_file(original_audio_path)
-                audio.export(optimized_audio_path, format="mp3", bitrate="64k")
+                # Step 1: Speaker Diarization with Pyannote.audio
+                diarization_result = pipeline(audio_path)
 
-                # Load optimized audio
-                audio_mp3 = AudioSegment.from_mp3(optimized_audio_path)
-                total_length_ms = len(audio_mp3)
-                num_chunks = math.ceil(total_length_ms / CHUNK_LENGTH_MS)
+                # Step 2: Transcription with Whisper
+                transcript_response = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=open(audio_path, "rb"),
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"]
+                )
 
-                st.write(f"Audio duration: {total_length_ms / 60000:.2f} mins, split into {num_chunks} chunks.")
+                segments = transcript_response.segments
 
-                transcripts = []
-                progress_bar = st.progress(0)
+                # Step 3: Merge Diarization + Transcription Results
+                diarized_transcript = []
+                for segment in segments:
+                    seg_start = segment['start']
+                    seg_text = segment["text"]
 
-                for i in range(num_chunks):
-                    start_ms = i * CHUNK_LENGTH_MS
-                    end_ms = min((i + 1) * CHUNK_LENGTH_MS, total_length_ms)
-                    chunk = audio_mp3[start_ms:end_ms]
+                    # Find corresponding speaker segment
+                    speaker_label = "Unknown"
+                    for turn, _, speaker in pipeline.itertracks(yield_label=True, audio=audio_path):
+                        if turn_overlaps(turn_start=segment.start, turn_end=segment.end, diarization_start=turn.start, diarization_end=turn.end):
+                            speaker_label = speaker_label_map(turn.speaker)
+                            break
 
-                    chunk_path = os.path.join(tmpdir, f"chunk_{i}.mp3")
-                    chunk.export(chunk_path, format="mp3", bitrate="64k")
+                    diarized_transcript.append(f"{speaker_label}: {segment.text}")
 
-                    st.write(f"Transcribing chunk {i + 1}/{num_chunks}...")
-                    try:
-                        transcript = transcribe_chunk(chunk_path)
-                        transcripts.append(transcript)
-                    except Exception as e:
-                        transcripts.append(f"[Error chunk {i + 1}: {str(e)}]")
+                final_transcript = "\n\n".join(diarized_transcript)
 
-                    progress_bar.progress((i + 1) / num_chunks)
+                st.success("Diarization and transcription complete!")
+                st.write("### 🎙️ Diarized Transcript")
+                st.text_area("Transcript", final_transcript, height=400)
 
-                full_transcript = "\n\n".join(transcripts)
+def turn_overlaps(segment_start, segment_end, turn_start, turn_end):
+    # Check if transcription segment overlaps diarization segment
+    return max(segment_start, turn_start) < min(segment_end, turn_end)
 
-            st.success("✅ Transcription complete!")
-            st.download_button(
-                "Download Full Transcript",
-                data=full_transcript,
-                file_name="transcript.txt",
-                mime="text/plain"
-            )
+def speaker_label_map(speaker):
+    return f"Speaker {speaker+1}"
 
-            st.subheader("Transcript:")
-            st.write(full_transcript)
