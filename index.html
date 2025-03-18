@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Audio Transcription (Whisper API)</title>
+</head>
+<body>
+  <h2>Audio Transcription Prototype</h2>
+
+  <label><input type="checkbox" id="consent-checkbox"> I confirm I have permission to record.</label><br><br>
+
+  <button id="start-btn" disabled>Start Recording</button>
+  <button id="stop-btn" disabled>Stop & Transcribe</button>
+
+  <p><strong>Status:</strong> <span id="status">Awaiting consent...</span></p>
+  <p><strong>Transcript:</strong> <span id="transcript"></span></p>
+
+<script>
+  let recorder, audioChunks = [];
+
+  document.getElementById('consent-checkbox').onchange = function() {
+    document.getElementById('start-btn').disabled = !this.checked;
+    document.getElementById('status').textContent = this.checked ? 'Ready to record.' : 'Awaiting consent...';
+  };
+
+  document.getElementById('start-btn').onclick = async () => {
+    audioChunks = [];
+    document.getElementById('status').textContent = 'Recording...';
+    document.getElementById('transcript').textContent = '';
+    document.getElementById('start-btn').disabled = true;
+    document.getElementById('stop-btn').disabled = false;
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => audioChunks.push(e.data);
+    recorder.start();
+  };
+
+  document.getElementById('stop-btn').onclick = () => {
+    recorder.stop();
+    document.getElementById('status').textContent = 'Uploading and transcribing...';
+    document.getElementById('stop-btn').disabled = true;
+
+    recorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'recording.webm');
+
+      // Send to backend server (Streamlit or Flask API endpoint)
+      const response = await fetch('/transcribe', {
+        method: 'POST',
+        body: formData
+      });
+
+      const result = await response.json();
+      document.getElementById('transcript').textContent = result.transcript;
+      document.getElementById('status').textContent = 'Transcription complete!';
+      document.getElementById('start-btn').disabled = false;
+    };
+  };
+</script>
+</body>
+</html>
