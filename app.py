@@ -5,41 +5,43 @@ import os
 from pydub import AudioSegment
 import math
 
-# Whisper setup
+# Whisper API setup
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.title("🎧 Long Audio Transcription (Auto-Split)")
+st.title("🎧 Enhanced Long Audio Transcription")
 
-uploaded_file = st.file_uploader("Upload your long audio file", type=["mp3", "wav", "webm", "m4a"])
+uploaded_file = st.file_uploader("Upload audio (any format)", type=["mp3", "wav", "webm", "m4a"])
 
 CHUNK_LENGTH_MS = 10 * 60 * 1000  # 10 min chunks
 
-def transcribe_audio_chunk(audio_chunk_path):
-    with open(audio_chunk_path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file
-        )
+def transcribe_chunk(chunk_path):
+    with open(chunk_path, "rb") as audio:
+        transcript = client.audio.transcriptions.create(model="whisper-1", file=audio)
     return transcript.text
 
 if uploaded_file:
     st.audio(uploaded_file)
-    audio_size_mb = uploaded_file.size / (1024 * 1024)
-    st.write(f"Uploaded audio size: {audio_size_mb:.2f} MB")
 
-    if st.button("Start Transcription"):
-        with st.spinner("Splitting audio and transcribing..."):
-            full_transcript = ""
+    if st.button("Transcribe (Optimized)"):
+        with st.spinner("Optimizing audio & transcribing..."):
             with tempfile.TemporaryDirectory() as tmpdir:
-                audio_path = os.path.join(tmpdir, "uploaded_audio")
-                with open(audio_path, "wb") as f:
+                original_audio_path = os.path.join(tmpdir, "original_audio")
+                optimized_audio_path = os.path.join(tmpdir, "optimized_audio.mp3")
+
+                # Save original file
+                with open(original_audio_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                audio = AudioSegment.from_file(audio_path)
-                total_length_ms = len(audio)
+                # Convert original audio to MP3 to compress size
+                audio = AudioSegment.from_file(original_audio_path)
+                audio.export(optimized_audio_path, format="mp3", bitrate="64k")
+
+                # Load optimized audio
+                audio_mp3 = AudioSegment.from_mp3(optimized_audio_path)
+                total_length_ms = len(audio_mp3)
                 num_chunks = math.ceil(total_length_ms / CHUNK_LENGTH_MS)
 
-                st.write(f"Audio duration: {total_length_ms / 60000:.2f} mins, splitting into {num_chunks} chunks.")
+                st.write(f"Audio duration: {total_length_ms / 60000:.2f} mins, split into {num_chunks} chunks.")
 
                 transcripts = []
                 progress_bar = st.progress(0)
@@ -47,17 +49,18 @@ if uploaded_file:
                 for i in range(num_chunks):
                     start_ms = i * CHUNK_LENGTH_MS
                     end_ms = min((i + 1) * CHUNK_LENGTH_MS, total_length_ms)
-                    chunk = audio[start_ms:end_ms]
+                    chunk = audio_mp3[start_ms:end_ms]
 
-                    chunk_file = os.path.join(tmpdir, f"chunk_{i}.mp3")
-                    chunk.export(chunk_file, format="mp3")
+                    chunk_path = os.path.join(tmpdir, f"chunk_{i}.mp3")
+                    chunk.export(chunk_path, format="mp3", bitrate="64k")
 
                     st.write(f"Transcribing chunk {i + 1}/{num_chunks}...")
                     try:
-                        text = transcribe_audio_chunk(chunk_file)
-                        transcripts.append(text)
+                        transcript = transcribe_chunk(chunk_path)
+                        transcripts.append(transcript)
                     except Exception as e:
-                        transcripts.append(f"[Error transcribing chunk {i + 1}: {str(e)}]")
+                        transcripts.append(f"[Error chunk {i + 1}: {str(e)}]")
+
                     progress_bar.progress((i + 1) / num_chunks)
 
                 full_transcript = "\n\n".join(transcripts)
@@ -66,7 +69,7 @@ if uploaded_file:
             st.download_button(
                 "Download Full Transcript",
                 data=full_transcript,
-                file_name="full_transcript.txt",
+                file_name="transcript.txt",
                 mime="text/plain"
             )
 
