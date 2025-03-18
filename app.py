@@ -1,72 +1,44 @@
 import streamlit as st
-from openai import OpenAI
+import assemblyai as aai
 import tempfile
 import os
 from pydub import AudioSegment
-import math
-from pyannote.audio import Pipeline
 
-# Whisper API setup
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# Set up AssemblyAI with your API key from Streamlit secrets
+aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
 
-# Pyannote pipeline setup (requires Hugging Face token)
-HUGGINGFACE_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
-pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=HUGGINGFACE_TOKEN)
+st.title("🎤 Audio Transcription with Speaker Diarization")
 
-st.title("🎤 Whisper Transcription with Speaker Diarization")
+uploaded_file = st.file_uploader("Upload audio file:", type=["mp3", "wav", "webm", "m4a"])
 
-uploaded_file = st.file_uploader("Upload your audio file", type=["mp3", "wav", "webm", "m4a"])
-
-if uploaded_file:
+if uploaded_file := uploaded_file := st.file_uploader("Upload audio:", type=["mp3", "wav", "m4a", "webm"]):
     st.audio(uploaded_file)
 
-    if st.button("Transcribe & Diarize Speakers"):
-        with st.spinner("Processing... (this may take several minutes)"):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                audio_path = os.path.join(tmpdir, "audio_input.mp3")
+    if st.button("Start Transcription with Speaker Detection"):
+        with st.spinner("Uploading and processing with AssemblyAI..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+                audio = AudioSegment.from_file(uploaded_file)
+                audio.export(tmp_file.name, format="mp3")
 
-                # Convert to MP3 for optimization
-                audio_segment = AudioSegment.from_file(uploaded_file)
-                audio_segment.export(audio_path, format="mp3", bitrate="64k")
+                # Configure AssemblyAI
+                aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
 
-                # Step 1: Speaker Diarization with Pyannote.audio
-                diarization_result = pipeline(audio_path)
+                transcriber = aai.Transcriber()
+                config = aai.TranscriptionConfig(speaker_labels=True)
 
-                # Step 2: Transcription with Whisper
-                transcript_response = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=open(audio_path, "rb"),
-                    response_format="verbose_json",
-                    timestamp_granularities=["segment"]
-                )
+                try:
+                    transcript = transcriber.transcribe(tmp_file.name, config=config)
 
-                segments = transcript_response.segments
+                    st.success("Transcription & Speaker detection complete!")
+                    transcript_with_speakers = ""
+                    for utterance in transcript.utterances:
+                        transcript_with_speakers += f"Speaker {utterance.speaker}: {utterance.text}\n\n"
 
-                # Step 3: Merge Diarization + Transcription Results
-                diarized_transcript = []
-                for segment in segments:
-                    seg_start = segment['start']
-                    seg_text = segment["text"]
+                    st.write("**Transcript with Speaker labels:**")
+                    st.write(transcript_with_speakers)
 
-                    # Find corresponding speaker segment
-                    speaker_label = "Unknown"
-                    for turn, _, speaker in pipeline.itertracks(yield_label=True, audio=audio_path):
-                        if turn_overlaps(turn_start=segment.start, turn_end=segment.end, diarization_start=turn.start, diarization_end=turn.end):
-                            speaker_label = speaker_label_map(turn.speaker)
-                            break
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-                    diarized_transcript.append(f"{speaker_label}: {segment.text}")
-
-                final_transcript = "\n\n".join(diarized_transcript)
-
-                st.success("Diarization and transcription complete!")
-                st.write("### 🎙️ Diarized Transcript")
-                st.text_area("Transcript", final_transcript, height=400)
-
-def turn_overlaps(segment_start, segment_end, turn_start, turn_end):
-    # Check if transcription segment overlaps diarization segment
-    return max(segment_start, turn_start) < min(segment_end, turn_end)
-
-def speaker_label_map(speaker):
-    return f"Speaker {speaker+1}"
-
+                finally:
+                    os.unlink(tmp_file.name)
