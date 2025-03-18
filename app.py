@@ -4,41 +4,47 @@ import tempfile
 import os
 from pydub import AudioSegment
 
-# Set up AssemblyAI with your API key from Streamlit secrets
+# Set your AssemblyAI API Key securely from Streamlit Secrets
 aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
 
 st.title("🎤 Audio Transcription with Speaker Diarization")
 
-uploaded_file = st.file_uploader("Upload audio file:", type=["mp3", "wav", "webm", "m4a"])
+uploaded_file = st.file_uploader("Upload your audio file", type=["mp3", "wav", "webm", "m4a"])
 
-if uploaded_file := uploaded_file := st.file_uploader("Upload audio:", type=["mp3", "wav", "m4a", "webm"]):
+if uploaded_file:
     st.audio(uploaded_file)
 
-    if st.button("Start Transcription with Speaker Detection"):
-        with st.spinner("Uploading and processing with AssemblyAI..."):
+    if st.button("Start Transcription and Speaker Diarization"):
+        with st.spinner("Processing transcription & diarization..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+                # Convert uploaded audio to optimized MP3
                 audio = AudioSegment.from_file(uploaded_file)
-                audio.export(tmp_file.name, format="mp3")
+                audio.export(tmp_file.name, format="mp3", bitrate="64k")
 
-                # Configure AssemblyAI
-                aai.settings.api_key = st.secrets["ASSEMBLYAI_API_KEY"]
+            # Setup AssemblyAI config with speaker labels
+            transcriber = aai.Transcriber()
+            config = aai.TranscriptionConfig(speaker_labels=True)
 
-                transcriber = aai.Transcriber()
-                config = aai.TranscriptionConfig(speaker_labels=True)
+            try:
+                transcript = transcriber.transcribe(tmp_file.name, config=config)
 
-                try:
-                    transcript = transcriber.transcribe(tmp_file.name, config=config)
+                st.success("✅ Transcription complete!")
+                transcript_with_speakers = ""
+                for utterance in transcript.utterances:
+                    transcript_with_speakers += f"Speaker {utterance.speaker}: {utterance.text}\n\n"
 
-                    st.success("Transcription & Speaker detection complete!")
-                    transcript_with_speakers = ""
-                    for utterance in transcript.utterances:
-                        transcript_with_speakers += f"Speaker {utterance.speaker}: {utterance.text}\n\n"
+                st.download_button(
+                    "Download Transcript",
+                    data=transcript_with_speakers,
+                    file_name="transcript_with_speakers.txt",
+                    mime="text/plain"
+                )
 
-                    st.write("**Transcript with Speaker labels:**")
-                    st.write(transcript_with_speakers)
+                st.write("### 🗣️ Transcript with Speaker Labels:")
+                st.text_area("Transcript", transcript_with_speakers, height=400)
 
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            except Exception as e:
+                st.error(f"Error during transcription: {e}")
 
-                finally:
-                    os.unlink(tmp_file.name)
+            finally:
+                os.unlink(tmp_file.name)
