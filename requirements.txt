@@ -2,3 +2,6 @@ streamlit
 openai
 pydub
 ffmpeg-python
+pyannote.audio
+torch
+torchaudio
